@@ -178,7 +178,7 @@ setLoading(false);
 
   }
 
-  if (!ready) return null; // or a spinner
+  
   
   if (loading) return <div className="rounded-2xl shadow p-4 bg-white">{t("loading",lang)}</div>;
 
