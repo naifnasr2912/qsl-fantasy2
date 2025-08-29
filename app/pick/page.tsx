@@ -284,7 +284,48 @@ async function persistSquadToSupabase(squad: SquadShape) {
  
 
 
+type DBPickRow = { 
+  player_id: number | string; 
+  is_bench: boolean; 
+  is_captain: boolean; 
+  is_vice: boolean; 
+  order_index: number; 
+}; 
 
+function rebuildSquadFromDB(picks: DBPickRow[], players: Player[]) { 
+  const byId = new Map(players.map(p => [String(p.id), p])); 
+  const starters: Player[] = []; 
+  const bench: Player[] = []; 
+  let captainId: Player["id"] | undefined; 
+  let viceId: Player["id"] | undefined; 
+
+  // Keep the original ordering 
+  const sorted = [...picks].sort((a, b) => 
+    (a.is_bench === b.is_bench) 
+    ? (a.order_index - b.order_index) 
+    : (a.is_bench ? 1 : -1) 
+  ); 
+
+  for (const r of sorted) { 
+    const p = byId.get(String(r.player_id)); 
+    if (!p) continue; 
+    (r.is_bench ? bench : starters).push(p); 
+    if (r.is_captain) captainId = p.id; 
+    if (r.is_vice) viceId = p.id; 
+  } 
+
+  // Respect formation limits 
+  const GK = starters.filter(p => p.position === "GK").slice(0, 1); 
+  const DEF = starters.filter(p => p.position === "DEF").slice(0, 3); 
+  const MID = starters.filter(p => p.position === "MID").slice(0, 5); 
+  const FWD = starters.filter(p => p.position === "FWD").slice(0, 2); 
+
+  const benchGK = bench.filter(p => p.position === "GK").slice(0, 1); 
+  const benchOut = bench.filter(p => p.position !== "GK").slice(0, 3); 
+
+  return { GK, DEF, MID, FWD, benchGK, benchOut, captainId, viceId }; } 
+
+ 
 
 export default function PickPage() { 
   const router = useRouter(); 
@@ -321,6 +362,43 @@ export default function PickPage() {
       } 
     })(); 
   }, [ready]); 
+
+  // Hydrate UI from Supabase picks for the active GW once players are ready 
+  useEffect(() => { 
+    if (!ready || players.length === 0) return; 
+
+    (async () => { 
+      // who am i ? 
+      const { data: auth } = await supabase.auth.getUser(); 
+      const uid = auth?.user?.id; 
+      if (!uid) return; 
+
+      // current GW ?
+      const gw = await getCurrentGW(); 
+      if (!gw) return; 
+      
+      // Fetch saved picks
+      const { data, error } = await supabase 
+        .from("picks") 
+        .select("player_id,is_bench,is_captain,is_vice,order_index") 
+        .eq("user_id", uid) 
+        .eq("gameweek_id", gw) 
+        .order("is_bench", { ascending: true }) 
+        .order("order_index", { ascending: true }); 
+ 
+      if (error) { 
+        console.warn("Load picks error:", error.message); 
+        return; 
+      } 
+ 
+      if (data && data.length > 0) { 
+        const next = rebuildSquadFromDB(data as DBPickRow[], players); 
+        setSquad((s: any) => ({ ...s, ...next })); 
+      } 
+  })(); 
+}, [ready, players]); 
+
+ 
 
   // Hydrate from localStorage 
   useEffect(() => { 
