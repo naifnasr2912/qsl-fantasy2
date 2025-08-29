@@ -326,6 +326,26 @@ function rebuildSquadFromDB(picks: DBPickRow[], players: Player[]) {
   return { GK, DEF, MID, FWD, benchGK, benchOut, captainId, viceId }; } 
 
  
+async function persistBoostersUsage({ 
+  doubleCaptainUsed, 
+  wildcardUsed, 
+  season = "2025/26", 
+}: { doubleCaptainUsed: boolean; wildcardUsed: boolean; season?: string }) { 
+  const { data: auth } = await supabase.auth.getUser(); 
+  if (!auth?.user) throw new Error("Not signed in"); 
+
+  const { error } = await supabase.rpc("upsert_boosters_usage", { 
+    dc_inc: doubleCaptainUsed ? 1 : 0, 
+    wc_inc: wildcardUsed ? 1 : 0, 
+    season_in: season, 
+  }); 
+
+  if (error) throw error; 
+} 
+
+ 
+
+
 
 export default function PickPage() { 
   const router = useRouter(); 
@@ -345,6 +365,10 @@ export default function PickPage() {
   const { boosters, setBoosters } = useLocalBoosters(userId); 
   const { data: persistedSquad, setData: setPersistedSquad } = useLocalSquad(userId); 
 
+  //track what was consumed this build session
+  const [wildcardUsedThisSession, setWildcardUsedThisSession] = useState(false);
+  const [doubleCaptainUsedThisSession, setDoubleCaptainUsedThisSession] = useState(false);
+
   // Load players 
   useEffect(() => { 
     if (!ready) return; 
@@ -362,6 +386,34 @@ export default function PickPage() {
       } 
     })(); 
   }, [ready]); 
+
+  // Load remaining boosters (2 each minus what’s used in DB) 
+  useEffect(() => { 
+    if (!ready || !userId) return; 
+
+    (async () => { 
+      const { data, error } = await supabase 
+      .from("boosters_usage") 
+      .select("double_captain_used,wildcard_used") 
+      .eq("user_id", userId) 
+      .eq("season", "2025/26") 
+      .maybeSingle(); 
+
+    if (error) { 
+      console.warn("boosters_usage load error:", error.message); 
+      return; 
+    } 
+ 
+    const dcLeft = Math.max(0, 2 - (data?.double_captain_used ?? 0)); 
+    const wcLeft = Math.max(0, 2 - (data?.wildcard_used ?? 0)); 
+ 
+    setBoosters({ doubleCaptainLeft: dcLeft, wildcardLeft: wcLeft }); 
+  
+
+    })(); 
+  }, [ready, userId]); 
+
+ 
 
   // Hydrate UI from Supabase picks for the active GW once players are ready 
   useEffect(() => { 
@@ -468,12 +520,14 @@ export default function PickPage() {
     if (!squad.captainId) return alert("Choose a captain first."); 
     if (boosters.doubleCaptainLeft <= 0) return alert("No Double Captain left."); 
     setBoosters((b: any) => ({ ...b, doubleCaptainLeft: b.doubleCaptainLeft - 1 })); 
-    setSquad((s: any) => ({ ...s, doubleCaptainOn: true })); 
+    setSquad((s: any) => ({ ...s, doubleCaptainOn: true }));
+    setDoubleCaptainUsedThisSession(true); 
   } 
 
   function useWildcard() { 
     if (boosters.wildcardLeft <= 0) return alert("No Wildcards left."); 
     setBoosters((b: any) => ({ ...b, wildcardLeft: b.wildcardLeft - 1 })); 
+    setWildcardUsedThisSession(true);
     alert("Wildcard activated for this session."); 
   } 
 
@@ -495,7 +549,11 @@ export default function PickPage() {
 
     const res = await persistSquadToSupabase(squad); 
 
-  
+    //save boosters usage
+    await persistBoostersUsage({ 
+      doubleCaptainUsed: !!doubleCaptainUsedThisSession, 
+      wildcardUsed: !!wildcardUsedThisSession, 
+    });
 
     alert(`Squad submitted for GW ${res.gameweekId}. (${res.total} rows written)`); 
 
