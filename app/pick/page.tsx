@@ -369,6 +369,9 @@ export default function PickPage() {
   const [wildcardUsedThisSession, setWildcardUsedThisSession] = useState(false);
   const [doubleCaptainUsedThisSession, setDoubleCaptainUsedThisSession] = useState(false);
 
+  const [deadlinePassed, setDeadlinePassed] = useState(false);
+  const [deadlineAt, setDeadlineAt] = useState<Date | null>(null);
+
   // Load players 
   useEffect(() => { 
     if (!ready) return; 
@@ -412,6 +415,42 @@ export default function PickPage() {
 
     })(); 
   }, [ready, userId]); 
+
+  // Check active GW deadline and set lock flag 
+  useEffect(() => { 
+    if (!ready) return; 
+    (async () => { 
+      const gw = await getCurrentGW(); 
+      if (!gw) return; 
+      const { data, error } = await supabase 
+      .from("gameweeks") 
+      .select("deadline_at,is_active") 
+      .eq("id", gw) 
+      .maybeSingle(); 
+
+    if (error) return; 
+ 
+    const dl = data?.deadline_at ? new Date(data.deadline_at) : null; 
+    setDeadlineAt(dl); 
+    setDeadlinePassed(!!dl ? Date.now() >= dl.getTime() : false); 
+  })(); 
+}, [ready]);
+  
+  useEffect(() => { 
+
+    if (!deadlineAt) return; 
+
+    const id = setInterval(() => { 
+
+      setDeadlinePassed(Date.now() >= deadlineAt.getTime()); 
+
+    }, 1000 * 30); // every 30s 
+
+    return () => clearInterval(id); 
+
+  }, [deadlineAt]); 
+
+ 
 
  
 
@@ -481,7 +520,8 @@ export default function PickPage() {
   })(); 
 
   // Actions 
-  function addPlayer(p: Player) { 
+  function addPlayer(p: Player) {
+    if (deadlinePassed) return alert("Gameweek is locked; no changes allowed."); 
     if (allSelected.some(s => s.id === p.id)) return; 
     if (p.position === "GK") { 
       if (squad.GK.length < 1) return setSquad((s: any) => ({ ...s, GK: [...s.GK, p] })); 
@@ -498,6 +538,7 @@ export default function PickPage() {
   } 
 
   function removePlayer(p: Player) { 
+    if (deadlinePassed) return alert("Gameweek is locked; no changes allowed.");
     const remove = (arr: Player[]) => arr.filter(x => x.id !== p.id); 
     setSquad((s: any) => ({ 
       ...s, 
@@ -509,14 +550,17 @@ export default function PickPage() {
   } 
 
   function setCaptain(p: Player) { 
+    if (deadlinePassed) return alert("Gameweek is locked; no changes allowed.");
     setSquad((s: any) => ({ ...s, captainId: p.id, viceId: s.viceId === p.id ? undefined : s.viceId })); 
   } 
 
-  function setVice(p: Player) { 
+  function setVice(p: Player) {
+    if (deadlinePassed) return alert("Gameweek is locked; no changes allowed."); 
     setSquad((s: any) => ({ ...s, viceId: p.id, captainId: s.captainId === p.id ? undefined : s.captainId })); 
   } 
 
   function useDoubleCaptain() { 
+    if (deadlinePassed) return alert("Gameweek is locked; no changes allowed.");
     if (!squad.captainId) return alert("Choose a captain first."); 
     if (boosters.doubleCaptainLeft <= 0) return alert("No Double Captain left."); 
     setBoosters((b: any) => ({ ...b, doubleCaptainLeft: b.doubleCaptainLeft - 1 })); 
@@ -525,6 +569,7 @@ export default function PickPage() {
   } 
 
   function useWildcard() { 
+    if (deadlinePassed) return alert("Gameweek is locked; no changes allowed.");
     if (boosters.wildcardLeft <= 0) return alert("No Wildcards left."); 
     setBoosters((b: any) => ({ ...b, wildcardLeft: b.wildcardLeft - 1 })); 
     setWildcardUsedThisSession(true);
@@ -584,6 +629,25 @@ export default function PickPage() {
       {open ? "Close" : "Create Fantasy Team"} 
     </button> 
   </div> 
+  {deadlinePassed && ( 
+
+  <div className="rounded-2xl border border-red-200 bg-red-50 p-3 text-red-700"> 
+
+    Gameweek is locked. You can view your team but can’t make changes. 
+
+    {deadlineAt && ( 
+
+      <span className="ml-1 opacity-70"> 
+
+        (Deadline was {deadlineAt.toLocaleString()}) 
+
+      </span> 
+
+    )} 
+
+  </div> 
+
+)} 
   {!open ? ( 
     <div className="rounded-2xl border p-6 text-center"> 
       Click “Create Fantasy Team” to start building. 
@@ -598,23 +662,69 @@ export default function PickPage() {
           { key: "DEF", label: "Defenders", count: 3 }, 
           { key: "MID", label: "Midfielders", count: 5 }, 
           { key: "FWD", label: "Forwards", count: 2 }, 
-        ]} squad={squad} onRemove={removePlayer} onCaptain={setCaptain} onVice={setVice} /> 
+        ]} squad={squad} onRemove={removePlayer} onCaptain={setCaptain} onVice={setVice}
+        deadlinePassed={deadlinePassed} /> 
         <SquadSection title="Bench" slots={[ 
           { key: "benchGK", label: "Bench GK", count: 1 }, 
           { key: "benchOut", label: "Bench Outfield", count: 3 }, 
-        ]} squad={squad} onRemove={removePlayer} onCaptain={setCaptain} onVice={setVice} /> 
+        ]} squad={squad} onRemove={removePlayer} onCaptain={setCaptain} onVice={setVice}
+        deadlinePassed={deadlinePassed} /> 
  
         {/* Boosters */} 
         <div className="rounded-2xl border p-4"> 
           <h3 className="font-semibold mb-2">Boosters</h3> 
-          <button onClick={useDoubleCaptain} className="px-3 py-1 mr-2 rounded border">Double Captain ({boosters.doubleCaptainLeft})</button> 
-          <button onClick={useWildcard} className="px-3 py-1 rounded border">Wildcard ({boosters.wildcardLeft})</button> 
-        </div> 
+          <button 
+            disabled={deadlinePassed || boosters.doubleCaptainLeft <= 0} 
+            onClick={useDoubleCaptain} 
+            title={ 
+              deadlinePassed 
+              ? "Locked: deadline passed" 
+              : boosters.doubleCaptainLeft <= 0 
+              ? "No Double Captain left" 
+              : "Use Double Captain" 
+            } 
+            className={`px-3 py-1 mr-2 rounded border ${ 
+              deadlinePassed || boosters.doubleCaptainLeft <= 0 
+              ? "opacity-50 cursor-not-allowed" 
+              : "hover:shadow" 
+            }`} 
+          > 
+           Double Captain ({boosters.doubleCaptainLeft}) 
+          </button> 
+          
+          <button 
+          disabled={deadlinePassed || boosters.wildcardLeft <= 0} 
+          onClick={useWildcard} 
+          title={ 
+          deadlinePassed 
+            ? "Locked: deadline passed" 
+            : boosters.wildcardLeft <= 0 
+            ? "No Wildcards left" 
+            : "Use Wildcard" 
+          } 
+          className={`px-3 py-1 rounded border ${ 
+
+            deadlinePassed || boosters.wildcardLeft <= 0 
+            ? "opacity-50 cursor-not-allowed" 
+            : "hover:shadow" 
+        }`} 
+      > 
+      Wildcard ({boosters.wildcardLeft}) 
+    </button> 
+
  
-        <button disabled={!canSubmit} onClick={handleSubmit} 
-          className={`px-4 py-2 rounded-2xl ${canSubmit ? "bg-black text-white" : "bg-gray-300 text-gray-500"}`}> 
-          Next & Submit 
-        </button> 
+        </div> 
+        <button 
+          disabled={!canSubmit || deadlinePassed} 
+          onClick={handleSubmit} 
+          className={`px-4 py-2 rounded-2xl transition shadow ${ 
+            !canSubmit || deadlinePassed 
+            ? "bg-gray-200 text-gray-500 cursor-not-allowed" 
+            : "bg-black text-white hover:opacity-90" 
+      }`} 
+    > 
+      {deadlinePassed ? "Locked (Deadline passed)" : "Next & Submit"} 
+      </button> 
       </div> 
 
            {/* Player Pool */} 
@@ -625,13 +735,22 @@ export default function PickPage() {
         <div className="space-y-2 max-h-[70vh] overflow-auto"> 
           {players.map(p => { 
             const disabled = allSelected.some(x => x.id === p.id) || budgetLeft < p.price; 
+
             return ( 
               <div key={p.id} className="flex justify-between border rounded p-2"> 
                 <div> 
                   <div>{p.name}</div> 
                   <div className="text-xs opacity-70">{p.position} • {p.club} • {p.price}m</div> 
                 </div> 
-                <button disabled={disabled} onClick={() => addPlayer(p)} className="px-2 py-1 border rounded"> 
+                <button disabled={disabled} 
+                onClick={() => addPlayer(p)} 
+                className={`px-3 py-1 rounded-lg border ${disabled ? "opacity-50 cursor-not-allowed" : "hover:shadow"}`} 
+                title={
+                  disabled
+                  ? (deadlinePassed ? "Locked: deadline passed" : "Already selected or over budget")
+                  : "Add to squad"
+                }
+                > 
                   {disabled ? "Added" : "Add"} 
                 </button> 
               </div> 
@@ -667,7 +786,7 @@ function BudgetBar({ used, left, cap }: { used: number; left: number; cap: numbe
 
 } 
 
-function SquadSection({ title, slots, squad, onRemove, onCaptain, onVice }: any) { 
+function SquadSection({ title, slots, squad, onRemove, onCaptain, onVice, deadlinePassed }: any) { 
 
   return ( 
 
@@ -677,11 +796,18 @@ function SquadSection({ title, slots, squad, onRemove, onCaptain, onVice }: any)
 
       {slots.map(({ key, label, count }: any) => ( 
 
-        <SlotRow key={key} label={label} players={squad[key]} required={count} 
-
-          onRemove={onRemove} onCaptain={onCaptain} onVice={onVice} 
-
-          captainId={squad.captainId} viceId={squad.viceId} /> 
+        <SlotRow 
+        
+        key={key} 
+        label={label} 
+        players={squad[key]} 
+        required={count} 
+        onRemove={onRemove} 
+        onCaptain={onCaptain} 
+        onVice={onVice} 
+        captainId={squad.captainId} 
+        viceId={squad.viceId}
+        deadlinePassed={deadlinePassed} /> 
 
       ))} 
 
@@ -693,7 +819,7 @@ function SquadSection({ title, slots, squad, onRemove, onCaptain, onVice }: any)
 
  
 
-function SlotRow({ label, players, required, onRemove, onCaptain, onVice, captainId, viceId }: any) { 
+function SlotRow({ label, players, required, onRemove, onCaptain, onVice, captainId, viceId,deadlinePassed }: any) { 
 
   const placeholders = required - players.length; 
 
@@ -715,11 +841,50 @@ function SlotRow({ label, players, required, onRemove, onCaptain, onVice, captai
 
             <div className="flex gap-1 mt-1 text-xs"> 
 
-              <button onClick={() => onCaptain(p)} className={captainId === p.id ? "bg-black text-white px-2" : "border px-2"}>C</button> 
+             <button 
 
-              <button onClick={() => onVice(p)} className={viceId === p.id ? "bg-black text-white px-2" : "border px-2"}>VC</button> 
+  disabled={deadlinePassed} 
 
-              <button onClick={() => onRemove(p)} className="border px-2">Remove</button> 
+  onClick={() => onCaptain(p)} 
+
+  className={`${captainId === p.id ? "bg-black text-white px-2" : "border px-2"} ${deadlinePassed ? "opacity-50 cursor-not-allowed" : ""}`} 
+
+> 
+
+  C 
+
+</button> 
+
+ <button 
+
+  disabled={deadlinePassed} 
+
+  onClick={() => onVice(p)} 
+
+  className={`${viceId === p.id ? "bg-black text-white px-2" : "border px-2"} ${deadlinePassed ? "opacity-50 cursor-not-allowed" : ""}`} 
+
+> 
+
+  VC 
+
+</button> 
+
+ <button 
+
+  disabled={deadlinePassed} 
+
+  onClick={() => onRemove(p)} 
+
+  className={`border px-2 ${deadlinePassed ? "opacity-50 cursor-not-allowed" : ""}`} 
+
+> 
+
+  Remove 
+
+</button> 
+
+ 
+              
 
             </div> 
 
