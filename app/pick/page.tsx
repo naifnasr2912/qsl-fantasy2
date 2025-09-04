@@ -26,6 +26,7 @@ type Player = {
   club?: string; 
   position: Position; 
   price: number; // in millions 
+  underdog?: boolean;
 }; 
 
 type BoosterState = { 
@@ -38,6 +39,7 @@ const FORMATION: Record<Position, number> = { GK: 1, DEF: 3, MID: 5, FWD: 2 };
 const BENCH_GK_REQUIRED = 1; 
 const BENCH_OUTFIELD_REQUIRED = 3; 
 const BUDGET_CAP = 100; 
+const UNDERDOG_MIN_RANK = 8; // ranks >= 8 are considered underdogs 
 
 const STORAGE_KEY = (uid: string) => `qsl_fantasy_builder_${uid}`; 
 const BOOSTERS_KEY = (uid: string) => `qsl_fantasy_boosters_${uid}`; 
@@ -381,7 +383,27 @@ export default function PickPage() {
         const { data, error } = await supabase.from("players").select("*"); 
         if (error) throw error; 
         const normalized = (data ?? []).map(normalizePlayerRow).filter(Boolean) as Player[]; 
-        setPlayers(normalized); 
+        // ⬇️ ADD from here (underdog logic)
+        const gw = await getCurrentGW(); 
+ 
+        const { data: ranks, error: ranksErr } = await supabase 
+          .from("club_rankings") 
+          .select("club,rank") 
+          .eq("gameweek_id", gw); 
+ 
+        // Build a map: club -> rank (ignore error; just means no underdogs yet) 
+        const rankMap = new Map<string, number>( 
+          (ranks ?? []).map((r: any) => [String(r.club), Number(r.rank)]) 
+        ); 
+ 
+        const withUnderdog = normalized.map((p) => { 
+          const r = p.club ? rankMap.get(String(p.club)) : undefined; 
+            return { ...p, underdog: typeof r === "number" ? r >= UNDERDOG_MIN_RANK : false }; 
+      }); 
+ 
+      setPlayers(withUnderdog); 
+      // ⬆️ ADD until here 
+  
       } catch (e: any) { 
         setError(e?.message || "Failed to load players"); 
       } finally { 
